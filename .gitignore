@@ -1,0 +1,44 @@
+# Python environments
+.venv/
+venv/
+env/
+ENV/
+
+# Python caches and build artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+build/
+dist/
+*.egg-info/
+
+# Generated synthetic datasets
+# Regenerate with: python scripts\generate_dataset.py
+data/*.csv
+
+# Environment files and local secrets
+.env
+.env.*
+!.env.example
+
+# Logs and local runtime files
+*.log
+*.pid
+*.sqlite3
+
+# IDE and OS files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Node/frontend dependencies if added later
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
