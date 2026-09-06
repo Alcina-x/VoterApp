@@ -264,6 +264,20 @@ PROCEDURES = {
     "default": ("system_faq.md", "VoteAssist AI is an academic decision-support simulation. All voter records are synthetic, and processed means only that a simulated workflow completed."),
 }
 
+HELP_ANSWER = (
+    "I can answer questions about voter records, station performance, dashboard totals, "
+    "processing trends, queue times, anomaly flags, demographics, procedures, reports, "
+    "and the limits of this synthetic demonstration. Try asking about VOTER001000, "
+    "PS-014, the busiest station, pending records, or the hourly trend."
+)
+
+
+def chat_result(answer: str, intent: str, tool: str, source_type: str, data: Any = None, sources: list[str] | None = None) -> dict[str, Any]:
+    result = {"answer": answer, "intent": intent, "tool_used": tool, "source_type": source_type, "data": data}
+    if sources:
+        result["sources"] = sources
+    return result
+
 
 def chat_answer(message: str, user_id: str) -> dict[str, Any]:
     started = time.perf_counter()
@@ -273,40 +287,76 @@ def chat_answer(message: str, user_id: str) -> dict[str, Any]:
     station_match = re.search(r"PS[- ]?\d{1,3}", upper)
     if not text:
         raise HTTPException(400, "Please enter a question")
+    if any(word in upper for word in ["HELP", "WHAT CAN YOU", "WHAT DO YOU", "CAPABILITIES"]):
+        result = chat_result(HELP_ANSWER, "assistant_help", "describe_capabilities", "knowledge_base")
+        record_audit(user_id, text, result["intent"], result["tool_used"], started)
+        return result
     if voter_match:
         voter_id = voter_match.group(0).replace(" ", "-")
         voter = VOTER_BY_ID.get(voter_id)
         if not voter:
             answer = "I could not retrieve that record from the synthetic database. Please verify the voter ID."
-            result = {"answer": answer, "intent": "voter_lookup", "tool_used": "get_voter_record", "source_type": "database", "data": None}
+            result = chat_result(answer, "voter_lookup", "get_voter_record", "database")
         else:
             status = "completed the simulated processing workflow" if voter["processing_status"] == "PROCESSED" else "not yet completed the simulated processing workflow"
-            result = {"answer": f'{voter_id} has {status} at {voter["polling_station_id"]}.', "intent": "voter_lookup", "tool_used": "get_voter_record", "source_type": "database", "data": {"voter_id": voter_id, "status": voter["processing_status"], "station": voter["polling_station_id"], "anomaly": anomaly_for(voter)}}
+            anomaly = anomaly_for(voter)
+            detail = f' It has an anomaly flag: {anomaly["reason"]}' if anomaly else " It has no anomaly flag."
+            result = chat_result(f'{voter_id} has {status} at {voter["polling_station_id"]}.{detail}', "voter_lookup", "get_voter_record", "database", {"voter_id": voter_id, "status": voter["processing_status"], "station": voter["polling_station_id"], "anomaly": anomaly})
         record_audit(user_id, text, result["intent"], result["tool_used"], started)
         return result
-    if station_match or "STATION" in upper:
+    if (station_match or "STATION" in upper) and not any(word in upper for word in ["TOP STATION", "BEST STATION", "HIGHEST", "BUSIEST", "LOWEST", "SLOWEST", "COMPARE STATIONS"]):
         station_id = station_match.group(0).replace(" ", "-") if station_match else "PS-001"
         stats = station_stats(station_id)
-        result = {"answer": f'{station_id} has processed {stats["processed"]:,} of {stats["registered"]:,} synthetic voter records ({stats["processing_rate"]}%).', "intent": "station_statistics", "tool_used": "get_station_statistics", "source_type": "database", "data": stats}
+        result = chat_result(f'{station_id} has processed {stats["processed"]:,} of {stats["registered"]:,} synthetic voter records ({stats["processing_rate"]}%). Average queue time is {stats["avg_queue_time"]} minutes and average processing time is {stats["avg_processing_time"]} minutes.', "station_statistics", "get_station_statistics", "database", stats)
+        record_audit(user_id, text, result["intent"], result["tool_used"], started)
+        return result
+    if any(word in upper for word in ["TOP STATION", "BEST STATION", "HIGHEST", "BUSIEST", "LOWEST", "SLOWEST", "COMPARE STATIONS"]):
+        station_data = sorted((station_stats(s["station_id"]) for s in STATIONS), key=lambda item: item["processing_rate"], reverse="LOWEST" not in upper and "SLOWEST" not in upper)
+        selected = station_data[:5]
+        label = "highest" if "LOWEST" not in upper and "SLOWEST" not in upper else "lowest"
+        answer = f'The {label} processing-rate stations are ' + ", ".join(f'{item["station_id"]} ({item["processing_rate"]}%)' for item in selected) + "."
+        result = chat_result(answer, "station_comparison", "compare_station_statistics", "analytics", selected)
+        record_audit(user_id, text, result["intent"], result["tool_used"], started)
+        return result
+    if any(word in upper for word in ["PENDING", "UNPROCESSED", "PROCESSED RECORDS", "PROCESSING RATE", "TOTAL RECORDS", "HOW MANY"]):
+        stats = summary()
+        result = chat_result(f'There are {stats["total_voters"]:,} synthetic records: {stats["processed_voters"]:,} processed and {stats["unprocessed_voters"]:,} pending. The processing rate is {stats["processing_rate"]}%.', "processing_summary", "get_processing_summary", "analytics", stats)
+        record_audit(user_id, text, result["intent"], result["tool_used"], started)
+        return result
+    if any(word in upper for word in ["AGE", "GENDER", "DEMOGRAPHIC", "DISTRICT", "CONSTITUENCY"]):
+        if "AGE" in upper:
+            groups = Counter(v["age_group"] for v in VOTERS)
+            data = [{"label": label, "value": groups[label]} for _, _, label in AGE_GROUPS]
+            answer = "Synthetic records by age group: " + ", ".join(f'{item["label"]}: {item["value"]:,}' for item in data) + "."
+        elif "GENDER" in upper:
+            groups = Counter(v["gender"] for v in VOTERS)
+            data = [{"label": label, "value": groups[label]} for label in GENDERS]
+            answer = "Synthetic records by gender: " + ", ".join(f'{item["label"]}: {item["value"]:,}' for item in data) + "."
+        else:
+            field = "district" if "DISTRICT" in upper else "constituency"
+            groups = Counter(v[field] for v in VOTERS)
+            data = [{"label": label, "value": value} for label, value in groups.most_common(10)]
+            answer = f"Top synthetic {field} volumes: " + ", ".join(f'{item["label"]}: {item["value"]:,}' for item in data) + "."
+        result = chat_result(answer, "demographic_analysis", "analyze_voter_demographics", "analytics", data)
         record_audit(user_id, text, result["intent"], result["tool_used"], started)
         return result
     if any(word in upper for word in ["PROCEDURE", "MISSING", "MANUAL REVIEW", "WORKFLOW"]):
         key = "missing" if "MISSING" in upper else "manual" if "MANUAL" in upper else "default"
         source, answer = PROCEDURES[key]
-        result = {"answer": answer, "intent": "procedure_question", "tool_used": "search_procedures", "source_type": "knowledge_base", "sources": [source], "data": None}
+        result = chat_result(answer, "procedure_question", "search_procedures", "knowledge_base", sources=[source])
         record_audit(user_id, text, result["intent"], result["tool_used"], started)
         return result
     if any(word in upper for word in ["ANOMAL", "FLAGGED"]):
         data = anomalies(10)
-        result = {"answer": f'The synthetic analytics pipeline currently flags {data["total"]} records. Flags indicate unusual patterns in generated workflow data and do not indicate wrongdoing.', "intent": "anomaly_analysis", "tool_used": "detect_anomalies", "source_type": "machine_learning", "data": data}
+        result = chat_result(f'The synthetic analytics pipeline currently flags {data["total"]} records. Flags indicate unusual patterns in generated workflow data and do not indicate wrongdoing.', "anomaly_analysis", "detect_anomalies", "machine_learning", data)
         record_audit(user_id, text, result["intent"], result["tool_used"], started)
         return result
     if any(word in upper for word in ["HOURLY", "TREND", "ACTIVITY"]):
-        result = {"answer": "Here is the verified simulated processing activity by hour.", "intent": "processing_trends", "tool_used": "get_processing_trends", "source_type": "analytics", "data": hourly()}
+        result = chat_result("Here is the verified simulated processing activity by hour.", "processing_trends", "get_processing_trends", "analytics", hourly())
         record_audit(user_id, text, result["intent"], result["tool_used"], started)
         return result
     stats = summary()
-    result = {"answer": f'The synthetic dataset contains {stats["total_voters"]:,} records across {stats["total_stations"]} stations, with a simulated processing rate of {stats["processing_rate"]}%.', "intent": "dashboard_summary", "tool_used": "get_turnout_statistics", "source_type": "analytics", "data": stats}
+    result = chat_result(f'The synthetic dataset contains {stats["total_voters"]:,} records across {stats["total_stations"]} stations, with a simulated processing rate of {stats["processing_rate"]}%.', "dashboard_summary", "get_turnout_statistics", "analytics", stats)
     record_audit(user_id, text, result["intent"], result["tool_used"], started)
     return result
 

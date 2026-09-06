@@ -50,6 +50,28 @@ def test_invalid_voter_does_not_invent_record():
     assert response.json()['data'] is None
 
 
+def test_chat_supports_help_and_processing_questions():
+    headers = auth_headers()
+    help_response = client.post('/api/chat', json={'message': 'What can you help me with?'}, headers=headers)
+    assert help_response.status_code == 200
+    assert help_response.json()['intent'] == 'assistant_help'
+    pending_response = client.post('/api/chat', json={'message': 'How many records are pending?'}, headers=headers)
+    assert pending_response.status_code == 200
+    assert pending_response.json()['intent'] == 'processing_summary'
+    assert pending_response.json()['data']['unprocessed_voters'] > 0
+
+
+def test_chat_supports_station_comparison_and_demographics():
+    headers = auth_headers()
+    station_response = client.post('/api/chat', json={'message': 'Which stations have the highest processing rate?'}, headers=headers)
+    assert station_response.status_code == 200
+    assert station_response.json()['intent'] == 'station_comparison'
+    age_response = client.post('/api/chat', json={'message': 'Show the records by age group.'}, headers=headers)
+    assert age_response.status_code == 200
+    assert age_response.json()['intent'] == 'demographic_analysis'
+    assert len(age_response.json()['data']) == 7
+
+
 def test_protected_endpoint_requires_authentication():
     response = client.get('/api/voters?limit=1')
     assert response.status_code == 401
