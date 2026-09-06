@@ -9,8 +9,8 @@ Then open:
 
 http://127.0.0.1:8000
 
-Demo login:
+Demo logins:
 
-Username: officer01
+Username: Alcina, Akshaya, or Ajay
 Password: demo123
 To stop the server, press Ctrl+C.

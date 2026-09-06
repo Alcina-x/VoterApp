@@ -22,7 +22,7 @@ uvicorn backend.main:app --reload
 
 Open `http://127.0.0.1:8000`.
 
-Demo login credentials are `officer01` / `demo123`.
+Demo login credentials are `Alcina`, `Akshaya`, or `Ajay` / `demo123`.
 
 ## API smoke checks
 
