@@ -7,7 +7,6 @@ import math
 import os
 import random
 import re
-import secrets
 import time
 from collections import Counter, defaultdict
 from datetime import datetime, timedelta
@@ -131,7 +130,7 @@ def anomaly_for(voter: dict[str, Any]) -> dict[str, Any] | None:
 
 
 AUDIT_LOG: list[dict[str, Any]] = []
-SESSION_SECRET = os.environ.get("VOTEASSIST_SESSION_SECRET", "").encode() or secrets.token_bytes(32)
+SESSION_SECRET = os.environ.get("VOTEASSIST_SESSION_SECRET", "voteassist-demo-session-secret").encode()
 SESSION_TTL_SECONDS = 3600
 BEARER = HTTPBearer(auto_error=False)
 

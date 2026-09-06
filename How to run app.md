@@ -4,7 +4,7 @@ python -m pip install -r requirements.txt
 python scripts\generate_dataset.py
 python -m uvicorn backend.main:app --reload
 
-
+.\.venv\Scripts\python.exe -m uvicorn backend.main:app --reload
 Then open:
 
 http://127.0.0.1:8000
