@@ -76,6 +76,7 @@ def build_dataset() -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[di
         timestamp = start + timedelta(minutes=rng.randint(0, 660)) if processed else None
         voter = {
             "voter_id": f"VOTER{index:06d}",
+            "photo_reference": f"synthetic://voter/{index:06d}.svg",
             "first_name": FIRST_NAMES[rng.randrange(len(FIRST_NAMES))],
             "last_name": LAST_NAMES[rng.randrange(len(LAST_NAMES))],
             "age": age,
@@ -127,6 +128,19 @@ def anomaly_for(voter: dict[str, Any]) -> dict[str, Any] | None:
     }[voter["anomaly_type"]]
     score = {"unusually_short_processing": 0.91, "unusually_long_processing": 0.94, "abnormal_queue_time": 0.88}[voter["anomaly_type"]]
     return {"anomaly_id": voter["voter_id"], "severity": "High" if score > 0.9 else "Medium", "score": score, "type": voter["anomaly_type"], "reason": reason, "model": "Isolation Forest + statistical baseline"}
+
+
+def synthetic_photo_data_uri(voter: dict[str, Any]) -> str:
+    skin = ["#d79b72", "#b97850", "#8f573d"][int(voter["voter_id"][-2:]) % 3]
+    hair = "#2c211d" if voter["gender"] != "Female" else "#241a19"
+    accent = "#087f73" if voter["gender"] == "Female" else "#f26b3a"
+    svg = f'''<svg xmlns="http://www.w3.org/2000/svg" width="240" height="300" viewBox="0 0 240 300">
+<rect width="240" height="300" fill="#e8efe8"/><rect x="24" y="24" width="192" height="252" rx="8" fill="#f8faf6"/>
+<path d="M52 276c5-56 31-80 68-80s63 24 68 80" fill="{accent}"/><ellipse cx="120" cy="126" rx="53" ry="66" fill="{skin}"/>
+<path d="M67 116c-4-56 23-78 54-78 39 0 57 28 52 78-16-18-28-29-50-31-21 3-38 14-56 31z" fill="{hair}"/>
+<circle cx="101" cy="126" r="5" fill="#102a2e"/><circle cx="139" cy="126" r="5" fill="#102a2e"/><path d="M106 157q14 10 28 0" fill="none" stroke="#102a2e" stroke-width="3" stroke-linecap="round"/>
+<text x="120" y="264" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#ffffff">SYNTHETIC REFERENCE</text></svg>'''
+    return "data:image/svg+xml;base64," + base64.b64encode(svg.encode()).decode()
 
 
 AUDIT_LOG: list[dict[str, Any]] = []
@@ -222,7 +236,7 @@ def get_voter(voter_id: str, _: str = Depends(require_user)) -> dict[str, Any]:
     voter = VOTER_BY_ID.get(voter_id.upper())
     if not voter:
         raise HTTPException(404, "Synthetic voter record not found")
-    return {**voter, "full_name": f'{voter["first_name"]} {voter["last_name"]}', "anomaly": anomaly_for(voter), "events": EVENTS_BY_VOTER.get(voter["voter_id"], [])}
+    return {**voter, "full_name": f'{voter["first_name"]} {voter["last_name"]}', "photo_data_uri": synthetic_photo_data_uri(voter), "anomaly": anomaly_for(voter), "events": EVENTS_BY_VOTER.get(voter["voter_id"], [])}
 
 
 @app.get("/api/stations")
@@ -236,9 +250,17 @@ def get_station_statistics(station_id: str, _: str = Depends(require_user)) -> d
 
 
 @app.get("/api/analytics/hourly")
-def hourly(_: str = Depends(require_user)) -> list[dict[str, int]]:
-    counts = Counter(datetime.fromisoformat(e["event_timestamp"]).hour for e in EVENTS if e["event_type"] == "PROCESSING_COMPLETED")
-    return [{"hour": hour, "processed_count": counts.get(hour, 0)} for hour in range(7, 19)]
+def hourly(_: str = Depends(require_user)) -> list[dict[str, Any]]:
+    completed = [e for e in EVENTS if e["event_type"] == "PROCESSING_COMPLETED"]
+    by_hour: dict[int, list[dict[str, Any]]] = defaultdict(list)
+    for event in completed:
+        by_hour[datetime.fromisoformat(event["event_timestamp"]).hour].append(event)
+    return [{
+        "hour": hour,
+        "processed_count": len(events),
+        "avg_queue_time": round(sum(e["queue_time_minutes"] for e in events) / len(events), 2) if events else 0,
+        "avg_processing_time": round(sum(e["processing_time_minutes"] for e in events) / len(events), 2) if events else 0,
+    } for hour in range(7, 19) for events in [by_hour[hour]]]
 
 
 @app.get("/api/analytics/age-groups")
@@ -259,6 +281,8 @@ def audit_logs(_: str = Depends(require_user)) -> list[dict[str, Any]]:
 
 
 PROCEDURES = {
+    "voter_best_practice": ("best_practices.md", "Best practices for voters: confirm the voter ID and polling station details before asking for a review, keep personal information private, and ask an authorised officer when something does not match."),
+    "officer_best_practice": ("best_practices.md", "Best practices for polling officers: verify the exact voter ID and returned record details, record discrepancies neutrally, preserve the original details, and escalate inconsistencies through the authorised review procedure."),
     "missing": ("officer_workflow.md", "For a missing synthetic record, confirm the exact synthetic voter ID, search again, and route the case to manual review. The AI cannot declare eligibility or create a record."),
     "manual": ("manual_review_procedure.md", "Manual review is a simulated workflow state. Record the reason, preserve the original event details, and ask a supervisor to verify the synthetic record."),
     "default": ("system_faq.md", "VoteAssist AI is an academic decision-support simulation. All voter records are synthetic, and processed means only that a simulated workflow completed."),
@@ -340,6 +364,12 @@ def chat_answer(message: str, user_id: str) -> dict[str, Any]:
         result = chat_result(answer, "demographic_analysis", "analyze_voter_demographics", "analytics", data)
         record_audit(user_id, text, result["intent"], result["tool_used"], started)
         return result
+    if any(term in upper for term in ["BEST PRACTICE", "BEST PRACTICES", "TIP", "TIPS", "ADVICE"]):
+        key = "voter_best_practice" if "VOTER" in upper else "officer_best_practice" if "OFFICER" in upper else "officer_best_practice"
+        source, answer = PROCEDURES[key]
+        result = chat_result(answer, "best_practice_question", "search_knowledge_base", "knowledge_base", sources=[source])
+        record_audit(user_id, text, result["intent"], result["tool_used"], started)
+        return result
     if any(word in upper for word in ["PROCEDURE", "MISSING", "MANUAL REVIEW", "WORKFLOW"]):
         key = "missing" if "MISSING" in upper else "manual" if "MANUAL" in upper else "default"
         source, answer = PROCEDURES[key]
@@ -370,7 +400,22 @@ def chat(payload: ChatRequest, _: str = Depends(require_user)) -> dict[str, Any]
 def report(_: str = Depends(require_user)) -> dict[str, Any]:
     stats = summary()
     top = sorted((station_stats(s["station_id"]) for s in STATIONS), key=lambda item: item["processing_rate"], reverse=True)[:3]
-    return {"title": "Simulated Election Operations Report", "sections": [{"title": "Executive Summary", "body": f'The synthetic dataset contains {stats["total_voters"]:,} records. {stats["processed_voters"]:,} have completed the simulated workflow ({stats["processing_rate"]}%).'}, {"title": "Station Performance", "body": "Top processing rates: " + ", ".join(f'{s["station_id"]} at {s["processing_rate"]}%' for s in top) + "."}, {"title": "Anomaly Summary", "body": f'{stats["flagged_anomalies"]} records were flagged by the analytical anomaly pipeline. These flags are not findings of misconduct.'}, {"title": "Limitations", "body": "This is an academic simulation using deterministic, synthetic records only. It is not an election system and makes no legal eligibility decisions."}]}
+    return {
+        "title": "Simulated Election Operations Report",
+        "overview": {
+            "total_voters": stats["total_voters"],
+            "processed_voters": stats["processed_voters"],
+            "pending_voters": stats["unprocessed_voters"],
+            "processing_rate": stats["processing_rate"],
+            "avg_queue_time": stats["avg_queue_time"],
+            "flagged_anomalies": stats["flagged_anomalies"],
+        },
+        "sections": [
+            {"title": "Current position", "body": f'{stats["processed_voters"]:,} of {stats["total_voters"]:,} records have completed processing. {stats["unprocessed_voters"]:,} remain pending.'},
+            {"title": "Station leaders", "body": ", ".join(f'{s["station_id"]} ({s["processing_rate"]}%)' for s in top) + "."},
+            {"title": "Review queue", "body": f'{stats["flagged_anomalies"]} records have an analytical flag and require officer review. A flag is not a finding of wrongdoing.'},
+        ],
+    }
 
 
 frontend = ROOT / "frontend"
