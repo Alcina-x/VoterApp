@@ -14,3 +14,9 @@ Demo logins:
 Username: Alcina, Akshaya, or Ajay
 Password: demo123
 To stop the server, press Ctrl+C.
+
+How to put it to git hub
+(run in terminal)
+git add .
+git commit -m "comment"
+git push
