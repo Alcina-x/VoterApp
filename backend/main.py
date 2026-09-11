@@ -28,7 +28,7 @@ random.seed(SEED)
 
 FIRST_NAMES = ["Aarav", "Mira", "Dev", "Anika", "Ishaan", "Nila", "Rohan", "Tara", "Kabir", "Leela", "Arun", "Sia"]
 LAST_NAMES = ["Sen", "Mehta", "Rao", "Das", "Kapoor", "Nair", "Iyer", "Bose", "Malik", "Shah", "Roy", "Joshi"]
-GENDERS = ["Female", "Male", "Other", "Prefer not to say"]
+GENDERS = ["Female", "Male"]
 AGE_GROUPS = [(18, 24, "18-24"), (25, 34, "25-34"), (35, 44, "35-44"), (45, 54, "45-54"), (55, 64, "55-64"), (65, 74, "65-74"), (75, 85, "75-85")]
 
 
@@ -88,6 +88,8 @@ def build_dataset() -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[di
             "booth_number": 1 + (index % station["booth_count"]),
             "registration_status": "REGISTERED",
             "processing_status": "PROCESSED" if processed else "PENDING",
+            "verification_status": "PENDING",
+            "verification_timestamp": None,
             "processing_timestamp": timestamp.isoformat() if timestamp else None,
             "queue_time_minutes": queue,
             "processing_time_minutes": processing,
@@ -161,6 +163,10 @@ class LoginRequest(BaseModel):
     password: str
 
 
+def voter_status_label(voter: dict[str, Any]) -> str:
+    return "VERIFIED" if voter.get("verification_status") == "VERIFIED" else "PENDING"
+
+
 def summary() -> dict[str, Any]:
     processed = sum(v["processing_status"] == "PROCESSED" for v in VOTERS)
     flagged = sum(anomaly_for(v) is not None for v in VOTERS)
@@ -227,8 +233,16 @@ def dashboard_summary(_: str = Depends(require_user)) -> dict[str, Any]:
 @app.get("/api/voters")
 def list_voters(search: str = "", status: str = "", limit: int = Query(25, ge=1, le=100), _: str = Depends(require_user)) -> dict[str, Any]:
     search = search.strip().upper()
-    records = [v for v in VOTERS if (not search or search in v["voter_id"] or search in f'{v["first_name"]} {v["last_name"]}'.upper()) and (not status or v["processing_status"] == status)]
-    return {"items": [{**v, "full_name": f'{v["first_name"]} {v["last_name"]}', "anomaly": anomaly_for(v)} for v in records[:limit]], "total": len(records)}
+    records = [v for v in VOTERS if (not search or search in v["voter_id"] or search in f'{v["first_name"]} {v["last_name"]}'.upper()) and (not status or voter_status_label(v) == status)]
+    items = []
+    for voter in records[:limit]:
+        items.append({
+            **voter,
+            "full_name": f'{voter["first_name"]} {voter["last_name"]}',
+            "status_label": voter_status_label(voter),
+            "anomaly": anomaly_for(voter),
+        })
+    return {"items": items, "total": len(records)}
 
 
 @app.get("/api/voters/{voter_id}")
@@ -236,7 +250,46 @@ def get_voter(voter_id: str, _: str = Depends(require_user)) -> dict[str, Any]:
     voter = VOTER_BY_ID.get(voter_id.upper())
     if not voter:
         raise HTTPException(404, "Synthetic voter record not found")
-    return {**voter, "full_name": f'{voter["first_name"]} {voter["last_name"]}', "photo_data_uri": synthetic_photo_data_uri(voter), "anomaly": anomaly_for(voter), "events": EVENTS_BY_VOTER.get(voter["voter_id"], [])}
+    return {
+        **voter,
+        "full_name": f'{voter["first_name"]} {voter["last_name"]}',
+        "status_label": voter_status_label(voter),
+        "photo_data_uri": synthetic_photo_data_uri(voter),
+        "anomaly": anomaly_for(voter),
+        "events": EVENTS_BY_VOTER.get(voter["voter_id"], []),
+    }
+
+
+@app.post("/api/voters/{voter_id}/verify")
+def verify_voter(voter_id: str, _: str = Depends(require_user)) -> dict[str, Any]:
+    voter = VOTER_BY_ID.get(voter_id.upper())
+    if not voter:
+        raise HTTPException(404, "Synthetic voter record not found")
+
+    if voter["verification_status"] != "VERIFIED":
+        voter["verification_status"] = "VERIFIED"
+        voter["verification_timestamp"] = datetime.now().isoformat(timespec="seconds")
+        event = {
+            "event_id": len(EVENTS) + 1,
+            "voter_id": voter["voter_id"],
+            "polling_station_id": voter["polling_station_id"],
+            "event_type": "VERIFICATION_COMPLETED",
+            "event_timestamp": voter["verification_timestamp"],
+            "queue_time_minutes": voter["queue_time_minutes"],
+            "processing_time_minutes": voter["processing_time_minutes"],
+            "status": "VERIFIED",
+        }
+        EVENTS.append(event)
+        EVENTS_BY_VOTER[voter["voter_id"]].append(event)
+
+    return {
+        **voter,
+        "full_name": f'{voter["first_name"]} {voter["last_name"]}',
+        "status_label": voter_status_label(voter),
+        "photo_data_uri": synthetic_photo_data_uri(voter),
+        "anomaly": anomaly_for(voter),
+        "events": EVENTS_BY_VOTER.get(voter["voter_id"], []),
+    }
 
 
 @app.get("/api/stations")

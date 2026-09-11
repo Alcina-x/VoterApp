@@ -19,7 +19,6 @@ dist/
 
 # Generated synthetic datasets
 # Regenerate with: python scripts\generate_dataset.py
-data/*.csv
 
 # Environment files and local secrets
 .env

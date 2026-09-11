@@ -1,5 +1,5 @@
 from fastapi.testclient import TestClient
-from backend.main import app
+from backend.main import VOTERS, app
 
 client = TestClient(app)
 
@@ -13,6 +13,10 @@ def test_health_has_required_dataset_size():
     response = client.get('/api/health')
     assert response.status_code == 200
     assert response.json()['synthetic_records'] == 25000
+
+
+def test_dataset_only_uses_female_and_male_genders():
+    assert all(v['gender'] in {'Female', 'Male'} for v in VOTERS)
 
 def test_login_accepts_demo_officer():
     response = client.post('/api/auth/login', json={'username': 'Alcina', 'password': 'demo123'})
@@ -48,6 +52,17 @@ def test_invalid_voter_does_not_invent_record():
     response = client.post('/api/chat', json={'message': 'Check VOTER999999'}, headers=auth_headers())
     assert response.status_code == 200
     assert response.json()['data'] is None
+
+
+def test_verify_endpoint_marks_voter_as_verified_and_persists_event():
+    response = client.post('/api/voters/VOTER000001/verify', headers=auth_headers())
+    assert response.status_code == 200
+    assert response.json()['status_label'] == 'VERIFIED'
+
+    lookup = client.get('/api/voters/VOTER000001', headers=auth_headers())
+    assert lookup.status_code == 200
+    assert lookup.json()['status_label'] == 'VERIFIED'
+    assert any(event['event_type'] == 'VERIFICATION_COMPLETED' for event in lookup.json()['events'])
 
 
 def test_chat_supports_help_and_processing_questions():

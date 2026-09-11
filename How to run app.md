@@ -2,6 +2,8 @@ Open PowerShell in VoterApp and run:
 
 python -m pip install -r requirements.txt
 python scripts\generate_dataset.py
+
+only run this in your terminal:
 python -m uvicorn backend.main:app --reload
 
 .\.venv\Scripts\python.exe -m uvicorn backend.main:app --reload
